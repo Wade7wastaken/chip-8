@@ -161,9 +161,9 @@ impl Chip8 {
                 if BITSHIFT_COPIES_Y {
                     *self.registers.get_mut(y) = self.registers.get(x);
                 }
-                let res = self.registers.get(x).overflowing_shr(1);
-                self.registers.set(x, res.0);
-                self.registers.set(0xF, res.1.into());
+                let n = self.registers.get(x);
+                self.registers.set(x, n.wrapping_shr(1));
+                self.registers.set(0xF, n & 1);
             }
 
             // Subtract from with carry
@@ -178,9 +178,9 @@ impl Chip8 {
                 if BITSHIFT_COPIES_Y {
                     *self.registers.get_mut(y) = self.registers.get(x);
                 }
-                let res = self.registers.get(x).overflowing_shl(1);
-                self.registers.set(x, res.0);
-                self.registers.set(0xF, res.1.into());
+                let n = self.registers.get(x);
+                self.registers.set(x, n.wrapping_shl(1));
+                self.registers.set(0xF, (n & (1 << 7) != 0).into());
             }
 
             // Skip if registers not equal
@@ -249,8 +249,8 @@ impl Chip8 {
             }
 
             (0xF, x, 0x5, 0x5) => {
-                for dest in 0..=x as usize {
-                    self.memory.set(self.i + dest, self.memory.get(dest));
+                for dest in 0..=x {
+                    self.memory.set(self.i + dest as usize, self.registers.get(dest));
                 }
                 if UPDATE_I_AFTER_STORE_OR_LOAD {
                     self.i += x as usize + 1;
@@ -275,7 +275,7 @@ fn main() {
     let mut chip8 = Chip8::new();
     chip8
         .memory
-        .load_bytes_at(0x200, include_bytes!("2-ibm-logo.ch8"));
+        .load_bytes_at(0x200, include_bytes!("4-flags.ch8"));
     chip8.pc = 0x200;
 
     let mut map = HashSet::new();
