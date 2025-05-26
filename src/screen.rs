@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Screen([u64; 32]);
+pub struct Screen(pub [u64; 32]);
 
 impl Screen {
     pub fn new() -> Self {

@@ -40,7 +40,7 @@ impl Instr {
 
 impl fmt::Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:x}{:x}", self.b1, self.b2)
+        write!(f, "0x{:02X}{:02X}", self.b1, self.b2)
     }
 }
 
@@ -66,9 +66,9 @@ impl Chip8 {
         }
     }
 
-    fn run(&mut self) {
+    fn execute_instr(&mut self) {
         let instr = Instr::new(self.memory.get(self.pc), self.memory.get(self.pc + 1));
-        // println!("running {instr} at address {}", self.pc);
+        // println!("running {instr} at address {:#05X}", self.pc);
         self.pc += 2;
         match instr.as_nibbles() {
             // Clear screen
@@ -125,9 +125,7 @@ impl Chip8 {
 
             // Add
             (0x7, x, _, _) => {
-                self.registers
-                    .update(x, |x| x.overflowing_add(instr.as_u8()).0);
-                // self.registers.get(x) = self.registers.get(x).overflowing_add(instr.as_u8()).0;
+                *self.registers.get_mut(x) = self.registers.get(x).wrapping_add(instr.as_u8());
             }
 
             // Copy
@@ -224,7 +222,7 @@ impl Chip8 {
                         }
                     }
                 }
-                self.display.show();
+                // self.display.show();
             }
 
             (0xF, x, 0x1, 0xE) => {
@@ -244,13 +242,14 @@ impl Chip8 {
                 let mut n = self.registers.get(x);
                 self.memory.set(self.i, n / 100);
                 n %= 100;
-                self.memory.set(self.i+1, n / 10);
+                self.memory.set(self.i + 1, n / 10);
                 self.memory.set(self.i + 2, n % 10);
             }
 
             (0xF, x, 0x5, 0x5) => {
                 for dest in 0..=x {
-                    self.memory.set(self.i + dest as usize, self.registers.get(dest));
+                    self.memory
+                        .set(self.i + dest as usize, self.registers.get(dest));
                 }
                 if UPDATE_I_AFTER_STORE_OR_LOAD {
                     self.i += x as usize + 1;
@@ -259,7 +258,8 @@ impl Chip8 {
 
             (0xF, x, 0x6, 0x5) => {
                 for dest in 0..=x {
-                    self.registers.set(dest, self.memory.get(self.i + dest as usize));
+                    self.registers
+                        .set(dest, self.memory.get(self.i + dest as usize));
                 }
                 if UPDATE_I_AFTER_STORE_OR_LOAD {
                     self.i += x as usize + 1;
@@ -269,6 +269,24 @@ impl Chip8 {
             _ => panic!("unknown instruction {instr}"),
         }
     }
+
+    fn run_at(&mut self, pc: usize) -> ! {
+        self.pc = pc;
+        loop {
+            self.execute_instr();
+        }
+    }
+
+    fn run_at_breaking(&mut self, pc: usize) {
+        self.pc = pc;
+        let mut map = HashSet::new();
+        loop {
+            if !map.insert(self.clone()) {
+                break;
+            }
+            self.execute_instr();
+        }
+    }
 }
 
 fn main() {
@@ -276,16 +294,11 @@ fn main() {
     chip8
         .memory
         .load_bytes_at(0x200, include_bytes!("4-flags.ch8"));
-    chip8.pc = 0x200;
 
-    let mut map = HashSet::new();
-    loop {
-        if !map.insert(chip8.clone()) {
-            break;
-        }
-        chip8.run();
-    }
+    chip8.run_at_breaking(0x200);
+
     chip8.display.show();
+    println!("{:?}", chip8.display.0);
     println!("Done!");
 }
 
@@ -294,6 +307,185 @@ mod tests {
     use crate::*;
 
     #[test]
+    fn chip8_logo() {
+        let mut chip8 = Chip8::new();
+        chip8
+            .memory
+            .load_bytes_at(0x200, include_bytes!("1-chip8-logo.ch8"));
+
+        chip8.run_at_breaking(0x200);
+        let expected = [
+            0,
+            3378249476730880,
+            2694781007314944,
+            90798382399488,
+            161167525036032,
+            301904073867264,
+            242874915766272,
+            0,
+            0,
+            35747455993182208,
+            64035830873586688,
+            54536273747873280,
+            54536204088772352,
+            54536204894119680,
+            28007188487997184,
+            17749844529321728,
+            32527349553358592,
+            63543249714546432,
+            54289622416230144,
+            54289502157145856,
+            54305067118626560,
+            63587212999888384,
+            35965178807712768,
+            17889757402822656,
+            0,
+            0,
+            1710891725545472,
+            2657666108375040,
+            4245369091145728,
+            304736603619328,
+            4052551168966656,
+            0,
+        ];
+        assert_eq!(chip8.display.0, expected);
+    }
+
+    #[test]
+    fn ibm_logo() {
+        let mut chip8 = Chip8::new();
+        chip8
+            .memory
+            .load_bytes_at(0x200, include_bytes!("2-ibm-logo.ch8"));
+
+        chip8.run_at_breaking(0x200);
+        let expected = [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            94435122047086592,
+            90071992547409920,
+            40462573361950720,
+            0,
+            91163777051115520,
+            126100789566373888,
+            73179062604120064,
+            72057594037927936,
+            1055222990618624,
+            36028797018963968,
+            1019491614179328,
+            126100789566373888,
+            76436119921618944,
+            54043195528445952,
+            130468317112561664,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ];
+        assert_eq!(chip8.display.0, expected);
+    }
+
+    #[test]
+    fn corax() {
+        let mut chip8 = Chip8::new();
+        chip8
+            .memory
+            .load_bytes_at(0x200, include_bytes!("3-corax+.ch8"));
+
+        chip8.run_at_breaking(0x200);
+        let expected = [
+            0,
+            133983583585698140,
+            2937518882502486168,
+            1804845124783184208,
+            631639863759472988,
+            0,
+            133984133349900628,
+            2991560978523760796,
+            1804845124766931280,
+            703697182927882576,
+            0,
+            133984133349900636,
+            2937518057882134668,
+            1750801379499448656,
+            703696908049975628,
+            0,
+            90073762088354140,
+            2924006434353719440,
+            1825112147728013640,
+            668795385327389000,
+            0,
+            2044435628380,
+            44926047627420,
+            26749472872784,
+            10840662870348,
+            0,
+            8160524294353060172,
+            4743460580748961928,
+            3536479971777452360,
+            8433001039834909020,
+            0,
+            0,
+        ];
+        assert_eq!(chip8.display.0, expected);
+    }
+
+    #[test]
+    fn flags() {
+        let mut chip8 = Chip8::new();
+        chip8
+            .memory
+            .load_bytes_at(0x200, include_bytes!("4-flags.ch8"));
+
+        chip8.run_at_breaking(0x200);
+        let expected = [
+            123145315234597,
+            768497238380205399,
+            461108898343039861,
+            153808519257264469,
+            0,
+            123145323282439,
+            12297697441062365862,
+            7378657167445878372,
+            2459581709469884967,
+            0,
+            123145331671047,
+            768482394981313185,
+            461075363246663271,
+            153809069000368679,
+            0,
+            0,
+            123145323623207,
+            12297697441062671697,
+            7378657167445996401,
+            2459581709470029143,
+            0,
+            123145331671047,
+            768482394981313185,
+            461075363246663271,
+            153809069000368679,
+            0,
+            0,
+            8160522525294687607,
+            4743416490269947685,
+            3536451716994241829,
+            8432990339232789799,
+            0,
+        ];
+        assert_eq!(chip8.display.0, expected);
+    }
+
     fn instr() {
         let instr = Instr::new(0x12, 0x34);
         assert_eq!(instr.as_address(), 0x234);
