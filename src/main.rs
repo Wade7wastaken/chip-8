@@ -9,6 +9,8 @@ mod registers;
 mod screen;
 
 const BITSHIFT_COPIES_Y: bool = false;
+const JUMP_WITH_OFFSET_REGISTER: bool = false;
+const UPDATE_I_AFTER_STORE_OR_LOAD: bool = false;
 
 struct Instr {
     b1: u8,
@@ -191,6 +193,20 @@ impl Chip8 {
             // Set index
             (0xA, _, _, _) => self.i = instr.as_address(),
 
+            (0xB, x, _, _) => {
+                let mut jump = instr.as_address();
+                if JUMP_WITH_OFFSET_REGISTER {
+                    jump += self.registers.get(x) as usize;
+                } else {
+                    jump += self.registers.get(0) as usize;
+                }
+                self.pc = jump;
+            }
+
+            (0xC, x, _, _) => {
+                self.registers.set(x, rand::random::<u8>() & instr.as_u8());
+            }
+
             // Display
             (0xD, x, y, n) => {
                 let x_c = self.registers.get(x) % 64;
@@ -209,6 +225,45 @@ impl Chip8 {
                     }
                 }
                 self.display.show();
+            }
+
+            (0xF, x, 0x1, 0xE) => {
+                self.i += self.registers.get(x) as usize;
+                if self.i >= 0x1000 {
+                    self.i %= 0x1000;
+                    self.registers.set(0xF, 1);
+                }
+            }
+
+            (0xF, x, 0x2, 0x9) => {
+                let ch = self.registers.get(x) & 0x0F;
+                self.i = 0x50 + (ch as usize * 5);
+            }
+
+            (0xF, x, 0x3, 0x3) => {
+                let mut n = self.registers.get(x);
+                self.memory.set(self.i, n / 100);
+                n %= 100;
+                self.memory.set(self.i+1, n / 10);
+                self.memory.set(self.i + 2, n % 10);
+            }
+
+            (0xF, x, 0x5, 0x5) => {
+                for dest in 0..=x as usize {
+                    self.memory.set(self.i + dest, self.memory.get(dest));
+                }
+                if UPDATE_I_AFTER_STORE_OR_LOAD {
+                    self.i += x as usize + 1;
+                }
+            }
+
+            (0xF, x, 0x6, 0x5) => {
+                for dest in 0..=x {
+                    self.registers.set(dest, self.memory.get(self.i + dest as usize));
+                }
+                if UPDATE_I_AFTER_STORE_OR_LOAD {
+                    self.i += x as usize + 1;
+                }
             }
 
             _ => panic!("unknown instruction {instr}"),
