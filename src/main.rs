@@ -1,94 +1,10 @@
 use std::{collections::HashSet, fmt};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Memory([u8; 4096]);
+use memory::Memory;
+use screen::Screen;
 
-impl Memory {
-    fn new() -> Self {
-        let mut mem = Memory([0; 4096]);
-        mem.set_font();
-        mem
-    }
-    fn get(&self, i: usize) -> u8 {
-        self.0[i]
-    }
-    fn set(&mut self, i: usize, x: u8) {
-        self.0[i] = x;
-    }
-    fn set_font(&mut self) {
-        // apparently its common to put the font data here
-        self.load_bytes_at(
-            0x50,
-            &[
-                0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
-                0x20, 0x60, 0x20, 0x20, 0x70, // 1
-                0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
-                0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
-                0x90, 0x90, 0xF0, 0x10, 0x10, // 4
-                0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
-                0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
-                0xF0, 0x10, 0x20, 0x40, 0x40, // 7
-                0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
-                0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
-                0xF0, 0x90, 0xF0, 0x90, 0x90, // A
-                0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
-                0xF0, 0x80, 0x80, 0x80, 0xF0, // C
-                0xE0, 0x90, 0x90, 0x90, 0xE0, // D
-                0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-                0xF0, 0x80, 0xF0, 0x80, 0x80, // F
-            ],
-        )
-    }
-    fn load_bytes_at(&mut self, i: usize, data: &[u8]) {
-        self.0[i..i + data.len()].clone_from_slice(data);
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Display([u64; 32]);
-
-impl Display {
-    fn new() -> Self {
-        Self([0; 32])
-    }
-    fn show(&self) {
-        println!("{}", "-".repeat(130));
-        for row in self.0 {
-            print!("|");
-            for i in 0..64 {
-                if (row & (1 << i)) == 0 {
-                    print!("  ");
-                } else {
-                    print!("██");
-                }
-            }
-            println!("|");
-        }
-        println!("{}", "-".repeat(130));
-    }
-
-    // returns the new state of the pixel
-    fn toggle(&mut self, x: usize, y: usize) -> bool {
-        self.0[y] |= (1 << x);
-        (self.0[y] & (1 << x)) != 0
-    }
-
-    // fn write_pixel(&mut self, x: usize, y: usize) {}
-
-    fn clear(&mut self) {
-        self.0 = [0; 32];
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Chip8 {
-    memory: Memory,
-    pc: usize,
-    i: usize,
-    stack: Vec<u16>,
-    registers: [u8; 16],
-    display: Display,
-}
+mod memory;
+mod screen;
 
 struct Instr {
     b1: u8,
@@ -122,6 +38,16 @@ impl fmt::Display for Instr {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Chip8 {
+    memory: Memory,
+    pc: usize,
+    i: usize,
+    stack: Vec<u16>,
+    registers: [u8; 16],
+    display: Screen,
+}
+
 impl Chip8 {
     fn new() -> Self {
         Self {
@@ -130,7 +56,7 @@ impl Chip8 {
             i: 0,
             stack: vec![],
             registers: [0; 16],
-            display: Display::new(),
+            display: Screen::new(),
         }
     }
 
@@ -183,6 +109,7 @@ fn main() {
         .memory
         .load_bytes_at(0x200, include_bytes!("2-ibm-logo.ch8"));
     chip8.pc = 0x200;
+
     let mut map = HashSet::new();
     loop {
         if !map.insert(chip8.clone()) {
