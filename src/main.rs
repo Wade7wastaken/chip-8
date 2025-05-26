@@ -6,6 +6,8 @@ use screen::Screen;
 mod memory;
 mod screen;
 
+const BITSHIFT_COPIES_Y: bool = false;
+
 struct Instr {
     b1: u8,
     b2: u8,
@@ -89,7 +91,28 @@ impl Chip8 {
                 self.pc = instr.as_address();
             }
 
-            // Set
+            // Skip if equal
+            (0x3, x, _, _) => {
+                if self.registers[x as usize] == instr.as_u8() {
+                    self.pc += 2;
+                }
+            }
+
+            // Skip if not equal
+            (0x4, x, _, _) => {
+                if self.registers[x as usize] != instr.as_u8() {
+                    self.pc += 2;
+                }
+            }
+
+            // Skip if registers equal
+            (0x5, x, y, 0x0) => {
+                if self.registers[x as usize] == self.registers[y as usize] {
+                    self.pc += 2;
+                }
+            }
+
+            // Set immediate
             (0x6, x, _, _) => {
                 self.registers[x as usize] = instr.as_u8();
             }
@@ -98,6 +121,74 @@ impl Chip8 {
             (0x7, x, _, _) => {
                 self.registers[x as usize] =
                     self.registers[x as usize].overflowing_add(instr.as_u8()).0;
+            }
+
+            // Copy
+            (0x8, x, y, 0x0) => {
+                self.registers[x as usize] = self.registers[y as usize]
+            }
+
+            // Binary OR
+            (0x8, x, y, 0x1) => {
+                self.registers[x as usize] |= self.registers[y as usize]
+            }
+
+            // Binary AND
+            (0x8, x, y, 0x2) => {
+                self.registers[x as usize] &= self.registers[y as usize]
+            }
+
+            // Binary XOR
+            (0x8, x, y, 0x3) => {
+                self.registers[x as usize] ^= self.registers[y as usize]
+            }
+
+            // Add with carry
+            (0x8, x, y, 0x4) => {
+                let res = self.registers[x as usize].overflowing_add(self.registers[y as usize]);
+                self.registers[x as usize] = res.0;
+                self.registers[0xF] = res.1.into();
+            }
+
+            // Subtract with carry
+            (0x8, x, y, 0x5) => {
+                let res = self.registers[x as usize].overflowing_sub(self.registers[y as usize]);
+                self.registers[x as usize] = res.0;
+                self.registers[0xF] = (!res.1).into();
+            }
+
+            // Shift right
+            (0x8, x, y, 0x6) => {
+                if BITSHIFT_COPIES_Y {
+                    self.registers[y as usize] = self.registers[x as usize];
+                }
+                let res = self.registers[x as usize].overflowing_shr(1);
+                self.registers[x as usize] = res.0;
+                self.registers[0xF] = res.1.into();
+            }
+
+            // Subtract from with carry
+            (0x8, x, y, 0x7) => {
+                let res = self.registers[y as usize].overflowing_sub(self.registers[x as usize]);
+                self.registers[x as usize] = res.0;
+                self.registers[0xF] = (!res.1).into();
+            }
+
+            // Shift left
+            (0x8, x, y, 0xE) => {
+                if BITSHIFT_COPIES_Y {
+                    self.registers[y as usize] = self.registers[x as usize];
+                }
+                let res = self.registers[x as usize].overflowing_shl(1);
+                self.registers[x as usize] = res.0;
+                self.registers[0xF] = res.1.into();
+            }
+
+            // Skip if registers not equal
+            (0x9, x, y, 0x0) => {
+                if self.registers[x as usize] != self.registers[y as usize] {
+                    self.pc += 2;
+                }
             }
 
             // Set index
