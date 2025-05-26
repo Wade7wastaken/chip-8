@@ -43,7 +43,7 @@ struct Chip8 {
     memory: Memory,
     pc: usize,
     i: usize,
-    stack: Vec<u16>,
+    stack: Vec<usize>,
     registers: [u8; 16],
     display: Screen,
 }
@@ -65,20 +65,45 @@ impl Chip8 {
         // println!("running {instr} at address {}", self.pc);
         self.pc += 2;
         match instr.as_nibbles() {
+            // Clear screen
             (0x0, 0x0, 0xE, 0x0) => {
                 self.display.clear();
             }
+
+            // Return from subroutine
+            (0x0, 0x0, 0xE, 0xE) => {
+                self.pc = self.stack.pop().unwrap();
+            }
+
+            // Execute machine code
+            (0x0, _, _, _) => unimplemented!("This instruction executes machine code for a different computer"),
+
+            // Jump
             (0x1, _, _, _) => {
                 self.pc = instr.as_address();
             }
+
+            // Jump to subroutine
+            (0x2, _, _, _) => {
+                self.stack.push(self.pc);
+                self.pc = instr.as_address();
+            }
+
+            // Set
             (0x6, x, _, _) => {
                 self.registers[x as usize] = instr.as_u8();
             }
+
+            // Add
             (0x7, x, _, _) => {
                 self.registers[x as usize] =
                     self.registers[x as usize].overflowing_add(instr.as_u8()).0;
             }
+
+            // Set index
             (0xA, _, _, _) => self.i = instr.as_address(),
+
+            // Display
             (0xD, x, y, n) => {
                 let x_c = self.registers[x as usize] % 64;
                 let y_c = self.registers[y as usize] % 32;
