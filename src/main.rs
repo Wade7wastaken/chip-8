@@ -1,9 +1,11 @@
 use std::{collections::HashSet, fmt};
 
 use memory::Memory;
+use registers::Registers;
 use screen::Screen;
 
 mod memory;
+mod registers;
 mod screen;
 
 const BITSHIFT_COPIES_Y: bool = false;
@@ -46,7 +48,7 @@ struct Chip8 {
     pc: usize,
     i: usize,
     stack: Vec<usize>,
-    registers: [u8; 16],
+    registers: Registers,
     display: Screen,
 }
 
@@ -57,7 +59,7 @@ impl Chip8 {
             pc: 0,
             i: 0,
             stack: vec![],
-            registers: [0; 16],
+            registers: Registers::new(),
             display: Screen::new(),
         }
     }
@@ -78,7 +80,9 @@ impl Chip8 {
             }
 
             // Execute machine code
-            (0x0, _, _, _) => unimplemented!("This instruction executes machine code for a different computer"),
+            (0x0, _, _, _) => {
+                unimplemented!("This instruction executes machine code for a different computer")
+            }
 
             // Jump
             (0x1, _, _, _) => {
@@ -93,100 +97,93 @@ impl Chip8 {
 
             // Skip if equal
             (0x3, x, _, _) => {
-                if self.registers[x as usize] == instr.as_u8() {
+                if self.registers.get(x) == instr.as_u8() {
                     self.pc += 2;
                 }
             }
 
             // Skip if not equal
             (0x4, x, _, _) => {
-                if self.registers[x as usize] != instr.as_u8() {
+                if self.registers.get(x) != instr.as_u8() {
                     self.pc += 2;
                 }
             }
 
             // Skip if registers equal
             (0x5, x, y, 0x0) => {
-                if self.registers[x as usize] == self.registers[y as usize] {
+                if self.registers.get(x) == self.registers.get(y) {
                     self.pc += 2;
                 }
             }
 
             // Set immediate
             (0x6, x, _, _) => {
-                self.registers[x as usize] = instr.as_u8();
+                self.registers.set(x, instr.as_u8());
             }
 
             // Add
             (0x7, x, _, _) => {
-                self.registers[x as usize] =
-                    self.registers[x as usize].overflowing_add(instr.as_u8()).0;
+                self.registers
+                    .update(x, |x| x.overflowing_add(instr.as_u8()).0);
+                // self.registers.get(x) = self.registers.get(x).overflowing_add(instr.as_u8()).0;
             }
 
             // Copy
-            (0x8, x, y, 0x0) => {
-                self.registers[x as usize] = self.registers[y as usize]
-            }
+            (0x8, x, y, 0x0) => *self.registers.get_mut(x) = self.registers.get(y),
 
             // Binary OR
-            (0x8, x, y, 0x1) => {
-                self.registers[x as usize] |= self.registers[y as usize]
-            }
+            (0x8, x, y, 0x1) => *self.registers.get_mut(x) |= self.registers.get(y),
 
             // Binary AND
-            (0x8, x, y, 0x2) => {
-                self.registers[x as usize] &= self.registers[y as usize]
-            }
+            (0x8, x, y, 0x2) => *self.registers.get_mut(x) &= self.registers.get(y),
 
             // Binary XOR
-            (0x8, x, y, 0x3) => {
-                self.registers[x as usize] ^= self.registers[y as usize]
-            }
+            (0x8, x, y, 0x3) => *self.registers.get_mut(x) ^= self.registers.get(y),
 
             // Add with carry
             (0x8, x, y, 0x4) => {
-                let res = self.registers[x as usize].overflowing_add(self.registers[y as usize]);
-                self.registers[x as usize] = res.0;
-                self.registers[0xF] = res.1.into();
+                let res = self.registers.get(x).overflowing_add(self.registers.get(y));
+                self.registers.set(x, res.0);
+                self.registers.set(0xF, res.1.into());
             }
 
             // Subtract with carry
             (0x8, x, y, 0x5) => {
-                let res = self.registers[x as usize].overflowing_sub(self.registers[y as usize]);
-                self.registers[x as usize] = res.0;
-                self.registers[0xF] = (!res.1).into();
+                let res = self.registers.get(x).overflowing_sub(self.registers.get(y));
+                self.registers.set(x, res.0);
+                self.registers.set(0xF, (!res.1).into());
             }
 
             // Shift right
             (0x8, x, y, 0x6) => {
                 if BITSHIFT_COPIES_Y {
-                    self.registers[y as usize] = self.registers[x as usize];
+                    *self.registers.get_mut(y) = self.registers.get(x);
                 }
-                let res = self.registers[x as usize].overflowing_shr(1);
-                self.registers[x as usize] = res.0;
-                self.registers[0xF] = res.1.into();
+                let res = self.registers.get(x).overflowing_shr(1);
+                self.registers.set(x, res.0);
+                self.registers.set(0xF, res.1.into());
             }
 
             // Subtract from with carry
             (0x8, x, y, 0x7) => {
-                let res = self.registers[y as usize].overflowing_sub(self.registers[x as usize]);
-                self.registers[x as usize] = res.0;
-                self.registers[0xF] = (!res.1).into();
+                let res = self.registers.get(y).overflowing_sub(self.registers.get(x));
+                self.registers.set(x, res.0);
+                self.registers.set(0xF, (!res.1).into());
             }
 
             // Shift left
             (0x8, x, y, 0xE) => {
                 if BITSHIFT_COPIES_Y {
-                    self.registers[y as usize] = self.registers[x as usize];
+                    *self.registers.get_mut(y) = self.registers.get(x);
                 }
-                let res = self.registers[x as usize].overflowing_shl(1);
-                self.registers[x as usize] = res.0;
-                self.registers[0xF] = res.1.into();
+                let res = self.registers.get(x).overflowing_shl(1);
+                self.registers.set(x, res.0);
+                self.registers.set(0xF, res.1.into());
             }
 
             // Skip if registers not equal
             (0x9, x, y, 0x0) => {
-                if self.registers[x as usize] != self.registers[y as usize] {
+                if self.registers.get(x) != self.registers.get(y) {
                     self.pc += 2;
                 }
             }
@@ -196,9 +193,9 @@ impl Chip8 {
 
             // Display
             (0xD, x, y, n) => {
-                let x_c = self.registers[x as usize] % 64;
-                let y_c = self.registers[y as usize] % 32;
-                self.registers[0xF] = 0;
+                let x_c = self.registers.get(x) % 64;
+                let y_c = self.registers.get(y) % 32;
+                self.registers.set(0xF, 0);
                 for row in 0..n {
                     let sprite_data = self.memory.get(self.i + row as usize);
                     for i in 0..8 {
@@ -207,7 +204,7 @@ impl Chip8 {
                                 .display
                                 .toggle((x_c + i) as usize, (y_c + row) as usize)
                         {
-                            self.registers[0xF] = 1;
+                            self.registers.set(0xF, 1);
                         }
                     }
                 }
