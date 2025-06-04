@@ -27,6 +27,7 @@ struct Config {
     bitshift_copies_y: bool,
     jump_with_offset_register: bool,
     update_i_after_store_or_load: bool,
+    debug_print_instrs: bool,
 }
 
 struct Instr {
@@ -77,8 +78,28 @@ impl Timers {
 }
 
 #[derive(Debug, Clone)]
+struct Shared {
+    instrs_per_second: f64,
+    fast_forward: bool,
+    instr_count: u32,
+    count_start: Instant,
+}
+
+impl Default for Shared {
+    fn default() -> Self {
+        Self {
+            instrs_per_second: 700.0,
+            fast_forward: false,
+            instr_count: 0,
+            count_start: Instant::now(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Chip8 {
     config: Config,
+    shared: Arc<Mutex<Shared>>,
     memory: Memory,
     pc: usize,
     i: usize,
@@ -86,12 +107,14 @@ struct Chip8 {
     registers: Registers,
     screen: Arc<Mutex<Screen>>,
     timers: Arc<Mutex<Timers>>,
+    keys: Arc<Mutex<[bool; 0x10]>>,
 }
 
 impl Chip8 {
     fn new(config: Config) -> Self {
         Self {
             config,
+            shared: Arc::new(Mutex::new(Shared::default())),
             memory: Memory::new(),
             pc: 0,
             i: 0,
@@ -99,12 +122,23 @@ impl Chip8 {
             registers: Registers::new(),
             screen: Arc::new(Mutex::new(Screen::new())),
             timers: Arc::new(Mutex::new(Timers::new())),
+            keys: Arc::new(Mutex::new([false; 0x10])),
         }
     }
 
     fn execute_instr(&mut self) {
+        {
+            let mut shared = self.shared.lock().unwrap();
+            shared.instr_count += 1;
+            if shared.instr_count > shared.instrs_per_second as u32 {
+                shared.instr_count = 0;
+                shared.count_start = Instant::now();
+            }
+        }
         let instr = Instr::new(self.memory.get(self.pc), self.memory.get(self.pc + 1));
-        // println!("running {instr} at address {:#05X}", self.pc);
+        if self.config.debug_print_instrs {
+            println!("running {instr} at address {:#05X}", self.pc);
+        }
         self.pc += 2;
         match instr.as_nibbles() {
             // Clear screen
@@ -165,16 +199,27 @@ impl Chip8 {
             }
 
             // Copy
-            (0x8, x, y, 0x0) => *self.registers.get_mut(x) = self.registers.get(y),
+            (0x8, x, y, 0x0) => {
+                *self.registers.get_mut(x) = self.registers.get(y);
+            }
 
             // Binary OR
-            (0x8, x, y, 0x1) => *self.registers.get_mut(x) |= self.registers.get(y),
+            (0x8, x, y, 0x1) => {
+                *self.registers.get_mut(x) |= self.registers.get(y);
+                self.registers.set(0xF, 0);
+            }
 
             // Binary AND
-            (0x8, x, y, 0x2) => *self.registers.get_mut(x) &= self.registers.get(y),
+            (0x8, x, y, 0x2) => {
+                *self.registers.get_mut(x) &= self.registers.get(y);
+                self.registers.set(0xF, 0);
+            }
 
             // Binary XOR
-            (0x8, x, y, 0x3) => *self.registers.get_mut(x) ^= self.registers.get(y),
+            (0x8, x, y, 0x3) => {
+                *self.registers.get_mut(x) ^= self.registers.get(y);
+                self.registers.set(0xF, 0);
+            }
 
             // Add with carry
             (0x8, x, y, 0x4) => {
@@ -227,6 +272,7 @@ impl Chip8 {
             // Set index
             (0xA, _, _, _) => self.i = instr.as_address(),
 
+            // Jump with offset
             (0xB, x, _, _) => {
                 self.pc = instr.as_address()
                     + self
@@ -235,6 +281,7 @@ impl Chip8 {
                         as usize;
             }
 
+            // Random
             (0xC, x, _, _) => {
                 self.registers
                     .set(x, ::rand::random::<u8>() & instr.as_u8());
@@ -242,37 +289,71 @@ impl Chip8 {
 
             // Display
             (0xD, x, y, n) => {
-                let x_c = self.registers.get(x) % 64;
-                let y_c = self.registers.get(y) % 32;
+                let x = self.registers.get(x) % 64;
+                let y = self.registers.get(y) % 32;
                 self.registers.set(0xF, 0);
                 let mut display = self.screen.lock().unwrap();
                 for row in 0..n {
+                    if y + row >= 32 {
+                        break;
+                    }
                     let sprite_data = self.memory.get(self.i + row as usize);
                     for i in 0..8 {
-                        if (sprite_data & (1 << (7 - i))) != 0
-                            && !display.toggle((x_c + i) as usize, (y_c + row) as usize)
-                        {
+                        if x + i >= 64 {
+                            break;
+                        }
+                        let sprite_pixel = (sprite_data & (1 << (7 - i))) != 0;
+                        if sprite_pixel && !display.toggle((x + i) as usize, (y + row) as usize) {
                             self.registers.set(0xF, 1);
                         }
                     }
                 }
-                // self.display.show();
             }
 
+            // Skip if pressed
+            (0xE, x, 0x9, 0xE) => {
+                let keys = self.keys.lock().unwrap();
+                if keys[self.registers.get(x) as usize] {
+                    self.pc += 2;
+                }
+            }
+            // Skip if not pressed
+            (0xE, x, 0xA, 0x1) => {
+                let keys = self.keys.lock().unwrap();
+                if !keys[self.registers.get(x) as usize] {
+                    self.pc += 2;
+                }
+            }
+
+            // Set delay timer
             (0xF, x, 0x0, 0x7) => {
                 let t = self.timers.lock().unwrap();
                 self.registers.set(x, t.delay_timer);
             }
 
+            // Get key
+            (0xF, x, 0x0, 0xA) => {
+                if let Some(idx) = self.keys.lock().unwrap().iter().position(|k| *k) {
+                    // key was pressed, store its index in vx
+                    self.registers.set(x, idx as u8);
+                } else {
+                    // no keys pressed
+                    self.pc -= 2;
+                }
+            }
+
+            // Get delay timer
             (0xF, x, 0x1, 0x5) => {
                 let mut t = self.timers.lock().unwrap();
                 t.delay_timer = self.registers.get(x);
             }
 
+            // Set sound timer
             (0xF, x, 0x1, 0x8) => {
                 self.timers.lock().unwrap().sound_timer = self.registers.get(x);
             }
 
+            // Add to index
             (0xF, x, 0x1, 0xE) => {
                 self.i += self.registers.get(x) as usize;
                 if self.i >= 0x1000 {
@@ -281,11 +362,13 @@ impl Chip8 {
                 }
             }
 
+            // Font character
             (0xF, x, 0x2, 0x9) => {
                 let ch = self.registers.get(x) & 0x0F;
                 self.i = 0x50 + (ch as usize * 5);
             }
 
+            // BCD
             (0xF, x, 0x3, 0x3) => {
                 let mut n = self.registers.get(x);
                 self.memory.set(self.i, n / 100);
@@ -294,6 +377,7 @@ impl Chip8 {
                 self.memory.set(self.i + 2, n % 10);
             }
 
+            // Store memory
             (0xF, x, 0x5, 0x5) => {
                 for dest in 0..=x {
                     self.memory
@@ -304,6 +388,7 @@ impl Chip8 {
                 }
             }
 
+            // Load memory
             (0xF, x, 0x6, 0x5) => {
                 for dest in 0..=x {
                     self.registers
@@ -320,45 +405,61 @@ impl Chip8 {
 
     fn run_at(&mut self, pc: usize) -> ! {
         self.pc = pc;
+
+        let mut frame_delay;
+        {
+            let options = self.shared.lock().unwrap();
+            frame_delay = 1.0 / options.instrs_per_second;
+        }
+
+        let mut next_time = Instant::now() + Duration::from_secs_f64(frame_delay);
         loop {
             self.execute_instr();
-            // thread::sleep(Duration::from_secs_f64(1.0 / 1000.0));
+
+            let fast_forward;
+            {
+                let options = self.shared.lock().unwrap();
+                fast_forward = options.fast_forward;
+                frame_delay = 1.0 / options.instrs_per_second;
+            }
+
+            if !fast_forward {
+                // while next_time > Instant::now() {}
+                thread::sleep(next_time - Instant::now());
+                next_time += Duration::from_secs_f64(frame_delay);
+            }
         }
     }
-
-    // fn run_at_breaking(&mut self, pc: usize) {
-    //     self.pc = pc;
-    //     let mut map = HashSet::new();
-    //     loop {
-    //         if !map.insert(self.clone()) {
-    //             break;
-    //         }
-    //         self.execute_instr();
-    //     }
-    // }
 }
 
-use macroquad::prelude::*;
 use window::draw;
 
 #[macroquad::main("CHIP-8")]
 async fn main() {
-    let mut chip8 = Chip8::new(Config::default());
+    let config = Config {
+        ..Default::default()
+    };
+    let mut chip8 = Chip8::new(config);
 
     let screen = Arc::clone(&chip8.screen);
     let timers = Arc::clone(&chip8.timers);
+    let options = Arc::clone(&chip8.shared);
+    let keys = Arc::clone(&chip8.keys);
 
     chip8
         .memory
-        .load_bytes_at(0x200, include_bytes!("timer.ch8"));
+        .load_bytes_at(0x200, include_bytes!("../programs/games/snake.ch8"));
 
-    thread::spawn(move || {
-        chip8.run_at(0x200);
-    });
+    thread::Builder::new()
+        .name("compute".into())
+        .spawn(move || {
+            chip8.run_at(0x200);
+        })
+        .unwrap();
 
     start_timer_thread(timers);
 
-    draw(screen).await;
+    draw(screen, options, keys).await;
 }
 
 fn start_timer_thread(timers: Arc<Mutex<Timers>>) {
@@ -381,196 +482,3 @@ fn start_timer_thread(timers: Arc<Mutex<Timers>>) {
         }
     });
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use crate::*;
-
-//     #[test]
-//     fn chip8_logo() {
-//         let mut chip8 = Chip8::new(Config::default());
-//         chip8
-//             .memory
-//             .load_bytes_at(0x200, include_bytes!("1-chip8-logo.ch8"));
-
-//         chip8.run_at_breaking(0x200);
-//         let expected = [
-//             0,
-//             3378249476730880,
-//             2694781007314944,
-//             90798382399488,
-//             161167525036032,
-//             301904073867264,
-//             242874915766272,
-//             0,
-//             0,
-//             35747455993182208,
-//             64035830873586688,
-//             54536273747873280,
-//             54536204088772352,
-//             54536204894119680,
-//             28007188487997184,
-//             17749844529321728,
-//             32527349553358592,
-//             63543249714546432,
-//             54289622416230144,
-//             54289502157145856,
-//             54305067118626560,
-//             63587212999888384,
-//             35965178807712768,
-//             17889757402822656,
-//             0,
-//             0,
-//             1710891725545472,
-//             2657666108375040,
-//             4245369091145728,
-//             304736603619328,
-//             4052551168966656,
-//             0,
-//         ];
-//         assert_eq!(chip8.display.0, expected);
-//     }
-
-//     #[test]
-//     fn ibm_logo() {
-//         let mut chip8 = Chip8::new(Config::default());
-//         chip8
-//             .memory
-//             .load_bytes_at(0x200, include_bytes!("2-ibm-logo.ch8"));
-
-//         chip8.run_at_breaking(0x200);
-//         let expected = [
-//             0,
-//             0,
-//             0,
-//             0,
-//             0,
-//             0,
-//             0,
-//             0,
-//             94435122047086592,
-//             90071992547409920,
-//             40462573361950720,
-//             0,
-//             91163777051115520,
-//             126100789566373888,
-//             73179062604120064,
-//             72057594037927936,
-//             1055222990618624,
-//             36028797018963968,
-//             1019491614179328,
-//             126100789566373888,
-//             76436119921618944,
-//             54043195528445952,
-//             130468317112561664,
-//             0,
-//             0,
-//             0,
-//             0,
-//             0,
-//             0,
-//             0,
-//             0,
-//             0,
-//         ];
-//         assert_eq!(chip8.display.0, expected);
-//     }
-
-//     #[test]
-//     fn corax() {
-//         let mut chip8 = Chip8::new(Config::default());
-//         chip8
-//             .memory
-//             .load_bytes_at(0x200, include_bytes!("3-corax+.ch8"));
-
-//         chip8.run_at_breaking(0x200);
-//         let expected = [
-//             0,
-//             133983583585698140,
-//             2937518882502486168,
-//             1804845124783184208,
-//             631639863759472988,
-//             0,
-//             133984133349900628,
-//             2991560978523760796,
-//             1804845124766931280,
-//             703697182927882576,
-//             0,
-//             133984133349900636,
-//             2937518057882134668,
-//             1750801379499448656,
-//             703696908049975628,
-//             0,
-//             90073762088354140,
-//             2924006434353719440,
-//             1825112147728013640,
-//             668795385327389000,
-//             0,
-//             2044435628380,
-//             44926047627420,
-//             26749472872784,
-//             10840662870348,
-//             0,
-//             8160524294353060172,
-//             4743460580748961928,
-//             3536479971777452360,
-//             8433001039834909020,
-//             0,
-//             0,
-//         ];
-//         assert_eq!(chip8.display.0, expected);
-//     }
-
-//     #[test]
-//     fn flags() {
-//         let mut chip8 = Chip8::new(Config::default());
-//         chip8
-//             .memory
-//             .load_bytes_at(0x200, include_bytes!("4-flags.ch8"));
-
-//         chip8.run_at_breaking(0x200);
-//         let expected = [
-//             123145315234597,
-//             768497238380205399,
-//             461108898343039861,
-//             153808519257264469,
-//             0,
-//             123145323282439,
-//             12297697441062365862,
-//             7378657167445878372,
-//             2459581709469884967,
-//             0,
-//             123145331671047,
-//             768482394981313185,
-//             461075363246663271,
-//             153809069000368679,
-//             0,
-//             0,
-//             123145323623207,
-//             12297697441062671697,
-//             7378657167445996401,
-//             2459581709470029143,
-//             0,
-//             123145331671047,
-//             768482394981313185,
-//             461075363246663271,
-//             153809069000368679,
-//             0,
-//             0,
-//             8160522525294687607,
-//             4743416490269947685,
-//             3536451716994241829,
-//             8432990339232789799,
-//             0,
-//         ];
-//         assert_eq!(chip8.display.0, expected);
-//     }
-
-//     #[test]
-//     fn instr() {
-//         let instr = Instr::new(0x12, 0x34);
-//         assert_eq!(instr.as_address(), 0x234);
-//         assert_eq!(instr.as_u8(), 0x34);
-//         assert_eq!(instr.as_nibbles(), (0x1, 0x2, 0x3, 0x4));
-//     }
-// }
