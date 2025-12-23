@@ -5,14 +5,14 @@ use std::{
 
 use macroquad::prelude::*;
 
-use crate::{Shared, screen::Screen};
+use crate::{Shared, keys::Keys, screen::Screen};
 
 const CONFIG_PANEL_RATIO: f32 = 0.4;
 
-pub async fn draw(
+pub async fn window_main(
     screen: Arc<Mutex<Screen>>,
     options: Arc<Mutex<Shared>>,
-    keys: Arc<Mutex<[bool; 0x10]>>,
+    keys: Arc<Mutex<Keys>>,
 ) {
     loop {
         handle_user_input(options.clone(), keys.clone());
@@ -65,34 +65,11 @@ fn draw_panel(options: Arc<Mutex<Shared>>) {
     draw_text(&instr_speed_text, start_x, y, 20.0, WHITE);
 }
 
-const KEY_MAP: [KeyCode; 0x10] = [
-    KeyCode::X,    // 0
-    KeyCode::Key1, // 1
-    KeyCode::Key2, // 2
-    KeyCode::Key3, // 3
-    KeyCode::Q,    // 4
-    KeyCode::W,    // 5
-    KeyCode::E,    // 6
-    KeyCode::A,    // 7
-    KeyCode::S,    // 8
-    KeyCode::D,    // 9
-    KeyCode::Z,    // A
-    KeyCode::C,    // B
-    KeyCode::Key4, // C
-    KeyCode::R,    // D
-    KeyCode::F,    // E
-    KeyCode::V,    // F
-];
-
-fn handle_user_input(options: Arc<Mutex<Shared>>, keys: Arc<Mutex<[bool; 0x10]>>) {
+fn handle_user_input(options: Arc<Mutex<Shared>>, keys: Arc<Mutex<Keys>>) {
     let pressed = get_keys_pressed();
-    let down = get_keys_down();
-    {
-        let mut keys = keys.lock().unwrap();
-        for i in 0..0x10 {
-            keys[i] = down.contains(&KEY_MAP[i]);
-        }
-    }
+
+    keys.lock().unwrap().set(get_keys_down());
+
     let mut options = options.lock().unwrap();
     if pressed.contains(&KeyCode::Tab) {
         options.fast_forward = !options.fast_forward;

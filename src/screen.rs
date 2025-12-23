@@ -7,7 +7,9 @@ impl Screen {
     }
 
     // returns the new state of the pixel
-    pub fn toggle(&mut self, x: usize, y: usize) -> bool {
+    pub fn toggle(&mut self, x: u8, y: u8) -> bool {
+        let x = x as usize;
+        let y = y as usize;
         self.0[y] ^= 1 << x;
         (self.0[y] & (1 << x)) != 0
     }

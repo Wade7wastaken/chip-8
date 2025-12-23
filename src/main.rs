@@ -10,6 +10,7 @@ use memory::Memory;
 use registers::Registers;
 use screen::Screen;
 
+mod keys;
 mod memory;
 mod registers;
 mod screen;
@@ -85,6 +86,13 @@ struct Shared {
     count_start: Instant,
 }
 
+impl Shared {
+    fn reset_instr_count(&mut self) {
+        self.instr_count = 0;
+        self.count_start = Instant::now();
+    }
+}
+
 impl Default for Shared {
     fn default() -> Self {
         Self {
@@ -107,7 +115,7 @@ struct Chip8 {
     registers: Registers,
     screen: Arc<Mutex<Screen>>,
     timers: Arc<Mutex<Timers>>,
-    keys: Arc<Mutex<[bool; 0x10]>>,
+    keys: Arc<Mutex<Keys>>,
 }
 
 impl Chip8 {
@@ -122,7 +130,7 @@ impl Chip8 {
             registers: Registers::new(),
             screen: Arc::new(Mutex::new(Screen::new())),
             timers: Arc::new(Mutex::new(Timers::new())),
-            keys: Arc::new(Mutex::new([false; 0x10])),
+            keys: Arc::new(Mutex::new(Keys::default())),
         }
     }
 
@@ -131,15 +139,17 @@ impl Chip8 {
             let mut shared = self.shared.lock().unwrap();
             shared.instr_count += 1;
             if shared.instr_count > shared.instrs_per_second as u32 {
-                shared.instr_count = 0;
-                shared.count_start = Instant::now();
+                shared.reset_instr_count();
             }
         }
+
         let instr = Instr::new(self.memory.get(self.pc), self.memory.get(self.pc + 1));
+        self.pc += 2;
+
         if self.config.debug_print_instrs {
             println!("running {instr} at address {:#05X}", self.pc);
         }
-        self.pc += 2;
+
         match instr.as_nibbles() {
             // Clear screen
             (0x0, 0x0, 0xE, 0x0) => {
@@ -283,8 +293,8 @@ impl Chip8 {
 
             // Random
             (0xC, x, _, _) => {
-                self.registers
-                    .set(x, ::rand::random::<u8>() & instr.as_u8());
+                let r = ::rand::random::<u8>() & instr.as_u8();
+                self.registers.set(x, r);
             }
 
             // Display
@@ -292,6 +302,7 @@ impl Chip8 {
                 let x = self.registers.get(x) % 64;
                 let y = self.registers.get(y) % 32;
                 self.registers.set(0xF, 0);
+
                 let mut display = self.screen.lock().unwrap();
                 for row in 0..n {
                     if y + row >= 32 {
@@ -303,7 +314,7 @@ impl Chip8 {
                             break;
                         }
                         let sprite_pixel = (sprite_data & (1 << (7 - i))) != 0;
-                        if sprite_pixel && !display.toggle((x + i) as usize, (y + row) as usize) {
+                        if sprite_pixel && !display.toggle(x + i, y + row) {
                             self.registers.set(0xF, 1);
                         }
                     }
@@ -312,15 +323,13 @@ impl Chip8 {
 
             // Skip if pressed
             (0xE, x, 0x9, 0xE) => {
-                let keys = self.keys.lock().unwrap();
-                if keys[self.registers.get(x) as usize] {
+                if self.keys.lock().unwrap().get(self.registers.get(x)) {
                     self.pc += 2;
                 }
             }
             // Skip if not pressed
             (0xE, x, 0xA, 0x1) => {
-                let keys = self.keys.lock().unwrap();
-                if !keys[self.registers.get(x) as usize] {
+                if !self.keys.lock().unwrap().get(self.registers.get(x)) {
                     self.pc += 2;
                 }
             }
@@ -432,7 +441,9 @@ impl Chip8 {
     }
 }
 
-use window::draw;
+use window::window_main;
+
+use crate::keys::Keys;
 
 #[macroquad::main("CHIP-8")]
 async fn main() {
@@ -459,7 +470,7 @@ async fn main() {
 
     start_timer_thread(timers);
 
-    draw(screen, options, keys).await;
+    window_main(screen, options, keys).await;
 }
 
 fn start_timer_thread(timers: Arc<Mutex<Timers>>) {
